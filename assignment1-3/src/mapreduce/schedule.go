@@ -12,14 +12,22 @@ func (mr *Master) schedule(phase jobPhase) {
 		ntasks = mr.nReduce
 		nios = len(mr.files)
 	}
-
 	debug("Schedule: %v %v tasks (%d I/Os)\n", ntasks, phase, nios)
 
+	for n := 0; n < ntasks; n++ {
+		task := new(DoTaskArgs)
+		task.File = mr.files[n]
+		task.JobName = mr.jobName
+		task.NumOtherPhase = nios
+		task.Phase = phase
+		task.TaskNumber = n
+	}
 	// All ntasks tasks have to be scheduled on workers, and only once all of
 	// them have been completed successfully should the function return.
 	// Remember that workers may fail, and that any given worker may finish
 	// multiple tasks.
 	//
+
 	// TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO
 	//
 	debug("Schedule: %v phase done\n", phase)

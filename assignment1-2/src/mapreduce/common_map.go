@@ -22,7 +22,8 @@ func doMap(
 	results := mapF(inFile, string(content))
 	full_slice := make([][]KeyValue, nReduce)
 	for _, value := range results {
-		full_slice[ihash(value.Key)%uint32(nReduce)] = append(full_slice[ihash(value.Key)%uint32(nReduce)], value)
+		index := ihash(value.Key) % uint32(nReduce)
+		full_slice[index] = append(full_slice[index], value)
 	}
 	for index, value := range full_slice {
 		f, err := os.Create(reduceName(jobName, mapTaskNumber, index))
