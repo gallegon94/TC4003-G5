@@ -22,10 +22,12 @@ func (mr *Master) schedule(phase jobPhase) {
   var task []DoTaskArgs
 	var worker string
 	var wg sync.WaitGroup
-	failed_count_tasks := 0
+	has_failed_tasks := false
+  failed_tasks := make([]bool, ntasks+1)
 
 	for n := 0; n < ntasks; n++ {
 		task = append(task, DoTaskArgs{mr.jobName, mr.files[n], phase, n, nios})
+    failed_tasks[n] = false;
 	}
 
 	fmt.Println("JALG Starting scheduling")
@@ -49,7 +51,8 @@ func (mr *Master) schedule(phase jobPhase) {
     }
 
     wg.Add(1)
-  	go func(wg *sync.WaitGroup, task *DoTaskArgs, worker string, failed *int) {
+  	go func(wg *sync.WaitGroup, task *DoTaskArgs, worker string,
+            failed_task *bool, failed *bool) {
 //			defer wg.Done()
 
 	  	ok := call(worker, "Worker.DoTask", *task, new(struct{}))
@@ -61,52 +64,67 @@ func (mr *Master) schedule(phase jobPhase) {
 //				mr.registerChannel <- worker
 	  	} else {
 				debug("JALG Terminó la tarea con failure\n")
-		  	*failed++
+        *failed_task = true;
+		  	*failed = true;
 	  	}
       wg.Done()
       fmt.Println("JALG saliendo de la tarea")
 			mr.registerChannel <- worker
-  	}(&wg, &task[n], worker, &failed_count_tasks)
+  	}(&wg, &task[n], worker, &failed_tasks[n], &has_failed_tasks)
 	}
 
 
 	debug("JALG Saliendo del do task\n")
 	fmt.Println("JALG esperando los tasks")
 
-	debug("JALG con %v tareas fallidas \n", failed_count_tasks)
+//	debug("JALG con %v tareas fallidas \n", failed_count_tasks)
 	debug("JALG esperando los tasks\n")
   wg.Wait()
 	fmt.Println("JALG tiempo de los tasks terminado")
   debug("JALG terminando los tasks\n")
 
-  if failed_count_tasks > 0 {
-	for failed_count_tasks != 0 {
-		for n := 0; n < ntasks; n++ {
-			if task[n].File != "" {
-//				found := false;
-//				for found == false {
-					worker = <- mr.registerChannel
-//					for _, w_available := range mr.workers {
-//						if worker == w_available {
-//							found = true
-//							break
-//						}
-//					}
-//				}
+  for has_failed_tasks == true {
+   has_failed_tasks = false
+   fmt.Println("JALG hubo tareas fallidas")
+   for n := 0; n < ntasks; n++ {
+  	if failed_tasks[n] == true {
+      found := false;
+      debug("JALG leyendo del register Channel\n")
+      fmt.Println("JALG leyendo del register Channel")
+      worker = <- mr.registerChannel
+      for found != true {
+	  		for _, w_available := range mr.workers {
+          if worker == w_available {
+            found = true
+            break
+          }
+        }
+        if found == false {
+          worker = <- mr.registerChannel
+        }
+      }
+      fmt.Println("JALG Encontramos un worker")
+      wg.Add(1)
+      go func(wg *sync.WaitGroup, task *DoTaskArgs, worker string,
+              failed_task *bool, failed *bool) {
+		  	ok := call(worker, "Worker.DoTask", *task, new(struct{}))
+		  	if ok {
+          *failed_task = false;
+          fmt.Println("JALG Terminó la tarea con success")
+			  } else {
+          *failed = true
+        }
+        fmt.Println("JALG saliendo de la tarea")
+        wg.Done()
+        mr.registerChannel <- worker
+		  }(&wg, &task[n], worker, &failed_tasks[n], &has_failed_tasks)
+	  }
+   }
+   fmt.Println("JALG Esperando las tasks que fallaron")
+   wg.Wait()
+   fmt.Println("JALG Terminamos de esperar las tasks")
+  }
 
-			  go func(task *DoTaskArgs, worker string, failed *int) {
-  				ok := call(worker, "Worker.DoTask", *task, new(struct{}))
-	  			if ok {
-			  		*failed--
-						mr.registerChannel <- worker
-  				}
-	  		}(&task[n], worker, &failed_count_tasks)
-			}
-		}
-	}
-//	} else {
-//		mr.registerChannel <- worker
-	}
 
 
 	//var wg sync.WaitGroup
