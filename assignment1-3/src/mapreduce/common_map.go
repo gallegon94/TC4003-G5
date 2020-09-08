@@ -31,6 +31,7 @@ func doMap(
 		j, err := json.Marshal(value)
 		checkError(err)
 		f.Write(j)
+		f.Close()
 	}
 }
 
