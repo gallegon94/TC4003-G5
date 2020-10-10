@@ -3,6 +3,7 @@ package chandy_lamport
 import (
 	"log"
 	"math/rand"
+	"time"
 )
 
 // Max random delay added to packet delivery
@@ -19,10 +20,11 @@ const maxDelay = 5
 // to pass tokens to each other, and collecting the snapshot state after the process
 // has terminated.
 type Simulator struct {
-	time           int
-	nextSnapshotId int
-	servers        map[string]*Server // key = server ID
-	logger         *Logger
+	time             int
+	nextSnapshotId   int
+	servers          map[string]*Server // key = server ID
+	logger           *Logger
+	serversCompleted int
 	// TODO: ADD MORE FIELDS HERE
 }
 
@@ -32,6 +34,7 @@ func NewSimulator() *Simulator {
 		0,
 		make(map[string]*Server),
 		NewLogger(),
+		0,
 	}
 }
 
@@ -107,6 +110,7 @@ func (sim *Simulator) StartSnapshot(serverId string) {
 	snapshotId := sim.nextSnapshotId
 	sim.nextSnapshotId++
 	sim.logger.RecordEvent(sim.servers[serverId], StartSnapshot{serverId, snapshotId})
+	sim.servers[serverId].StartSnapshot(snapshotId)
 	// TODO: IMPLEMENT ME
 }
 
@@ -114,13 +118,29 @@ func (sim *Simulator) StartSnapshot(serverId string) {
 // completed on a particular server
 func (sim *Simulator) NotifySnapshotComplete(serverId string, snapshotId int) {
 	sim.logger.RecordEvent(sim.servers[serverId], EndSnapshot{serverId, snapshotId})
+	sim.serversCompleted++
+
 	// TODO: IMPLEMENT ME
 }
 
 // Collect and merge snapshot state from all the servers.
 // This function blocks until the snapshot process has completed on all servers.
 func (sim *Simulator) CollectSnapshot(snapshotId int) *SnapshotState {
+	for sim.serversCompleted != len(sim.servers) {
+		time.Sleep(time.Second * 2)
+	}
+
 	// TODO: IMPLEMENT ME
 	snap := SnapshotState{snapshotId, make(map[string]int), make([]*SnapshotMessage, 0)}
+
+	for ID, server := range sim.servers {
+		snap.tokens[ID] = server.snapshot.Tokens
+		for src, messagelist := range server.snapshot.inboundList {
+			for _, message := range messagelist {
+				snap.messages = append(snap.messages, &SnapshotMessage{src, server.Id, message})
+			}
+		}
+	}
+
 	return &snap
 }

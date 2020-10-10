@@ -2,6 +2,13 @@ package chandy_lamport
 
 import "log"
 
+type Snapshot struct {
+	Started         bool
+	Tokens          int
+	MarkersReceived int
+	inboundList     map[string][]interface{}
+}
+
 // The main participant of the distributed snapshot protocol.
 // Servers exchange token messages and marker messages among each other.
 // Token messages represent the transfer of tokens from one server to another.
@@ -13,6 +20,7 @@ type Server struct {
 	sim           *Simulator
 	outboundLinks map[string]*Link // key = link.dest
 	inboundLinks  map[string]*Link // key = link.src
+	snapshot      Snapshot
 	// TODO: ADD MORE FIELDS HERE
 }
 
@@ -31,6 +39,12 @@ func NewServer(id string, tokens int, sim *Simulator) *Server {
 		sim,
 		make(map[string]*Link),
 		make(map[string]*Link),
+		Snapshot{
+			false,
+			0,
+			0,
+			make(map[string][]interface{}),
+		},
 	}
 }
 
@@ -84,11 +98,35 @@ func (server *Server) SendTokens(numTokens int, dest string) {
 // When the snapshot algorithm completes on this server, this function
 // should notify the simulator by calling `sim.NotifySnapshotComplete`.
 func (server *Server) HandlePacket(src string, message interface{}) {
-	// TODO: IMPLEMENT ME
+	switch msg := message.(type) {
+	case TokenMessage:
+		if server.snapshot.Started {
+			if _, ok := server.snapshot.inboundList[src]; !ok {
+				server.snapshot.inboundList[src] = make([]interface{}, 0)
+			}
+			server.snapshot.inboundList[src] = append(server.snapshot.inboundList[src], message)
+		} else {
+			server.Tokens += msg.numTokens
+		}
+	case MarkerMessage:
+		if server.snapshot.Started {
+			server.snapshot.MarkersReceived++
+			if server.snapshot.MarkersReceived == len(server.inboundLinks) {
+				//TODO Check this value
+				server.sim.NotifySnapshotComplete(server.Id, server.sim.nextSnapshotId-1)
+			}
+		} else {
+			server.StartSnapshot(msg.snapshotId)
+			server.snapshot.MarkersReceived++
+		}
+	}
 }
 
 // Start the chandy-lamport snapshot algorithm on this server.
 // This should be called only once per server.
 func (server *Server) StartSnapshot(snapshotId int) {
-	// TODO: IMPLEMENT ME
+	server.snapshot.Tokens = server.Tokens
+	server.snapshot.Started = true
+	server.snapshot.MarkersReceived = 0
+	server.SendToNeighbors(MarkerMessage{snapshotId})
 }
