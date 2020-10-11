@@ -3,7 +3,6 @@ package chandy_lamport
 import (
 	"log"
 	"math/rand"
-	"time"
 )
 
 // Max random delay added to packet delivery
@@ -117,6 +116,7 @@ func (sim *Simulator) StartSnapshot(serverId string) {
 // Callback for servers to notify the simulator that the snapshot process has
 // completed on a particular server
 func (sim *Simulator) NotifySnapshotComplete(serverId string, snapshotId int) {
+	log.Println(serverId)
 	sim.logger.RecordEvent(sim.servers[serverId], EndSnapshot{serverId, snapshotId})
 	sim.serversCompleted++
 
@@ -126,8 +126,7 @@ func (sim *Simulator) NotifySnapshotComplete(serverId string, snapshotId int) {
 // Collect and merge snapshot state from all the servers.
 // This function blocks until the snapshot process has completed on all servers.
 func (sim *Simulator) CollectSnapshot(snapshotId int) *SnapshotState {
-	for sim.serversCompleted != len(sim.servers) {
-		time.Sleep(time.Second * 2)
+	for sim.serversCompleted < len(sim.servers) {
 	}
 
 	// TODO: IMPLEMENT ME
@@ -141,6 +140,7 @@ func (sim *Simulator) CollectSnapshot(snapshotId int) *SnapshotState {
 			}
 		}
 	}
-
+	sim.serversCompleted = 0
+	println(snap.String())
 	return &snap
 }
