@@ -20,7 +20,7 @@ type Server struct {
 	sim           *Simulator
 	outboundLinks map[string]*Link // key = link.dest
 	inboundLinks  map[string]*Link // key = link.src
-	snapshot      Snapshot
+	snapshot      []Snapshot
 	// TODO: ADD MORE FIELDS HERE
 }
 
@@ -39,12 +39,13 @@ func NewServer(id string, tokens int, sim *Simulator) *Server {
 		sim,
 		make(map[string]*Link),
 		make(map[string]*Link),
-		Snapshot{
-			false,
-			0,
-			make(map[string]bool),
-			make(map[string][]interface{}),
-		},
+		make([]Snapshot, 20),
+		//		Snapshot{
+		//			false,
+		//			0,
+		//			make(map[string]bool),
+		//			make(map[string][]interface{}),
+		//		},
 	}
 }
 
@@ -101,21 +102,23 @@ func (server *Server) HandlePacket(src string, message interface{}) {
 	switch msg := message.(type) {
 	case TokenMessage:
 		server.Tokens += msg.numTokens
-		if server.snapshot.Started {
-			if !server.snapshot.MarkersReceived[src] {
-				if _, ok := server.snapshot.inboundList[src]; !ok {
-					server.snapshot.inboundList[src] = make([]interface{}, 0)
+		for i := 0; i < len(server.snapshot); i++ {
+			if server.snapshot[i].Started {
+				if !server.snapshot[i].MarkersReceived[src] {
+					if _, ok := server.snapshot[i].inboundList[src]; !ok {
+						server.snapshot[i].inboundList[src] = make([]interface{}, 0)
+					}
+					server.snapshot[i].inboundList[src] = append(server.snapshot[i].inboundList[src], msg)
 				}
-				server.snapshot.inboundList[src] = append(server.snapshot.inboundList[src], msg)
 			}
 		}
 	case MarkerMessage:
-		if !server.snapshot.Started {
+		if !server.snapshot[msg.snapshotId].Started {
 			server.StartSnapshot(msg.snapshotId)
 		}
-		server.snapshot.MarkersReceived[src] = true
-		if len(server.snapshot.MarkersReceived) == len(server.inboundLinks) {
-			server.snapshot.Started = false
+		server.snapshot[msg.snapshotId].MarkersReceived[src] = true
+		if len(server.snapshot[msg.snapshotId].MarkersReceived) == len(server.inboundLinks) {
+			server.snapshot[msg.snapshotId].Started = false
 			server.sim.NotifySnapshotComplete(server.Id, msg.snapshotId)
 		}
 	}
@@ -124,7 +127,7 @@ func (server *Server) HandlePacket(src string, message interface{}) {
 // Start the chandy-lamport snapshot algorithm on this server.
 // This should be called only once per server.
 func (server *Server) StartSnapshot(snapshotId int) {
-	server.snapshot = Snapshot{
+	server.snapshot[snapshotId] = Snapshot{
 		true,
 		server.Tokens,
 		make(map[string]bool),

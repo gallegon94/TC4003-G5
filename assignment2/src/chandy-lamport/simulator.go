@@ -23,7 +23,7 @@ type Simulator struct {
 	nextSnapshotId   int
 	servers          map[string]*Server // key = server ID
 	logger           *Logger
-	serversCompleted int
+	serversCompleted []int
 	// TODO: ADD MORE FIELDS HERE
 }
 
@@ -33,7 +33,7 @@ func NewSimulator() *Simulator {
 		0,
 		make(map[string]*Server),
 		NewLogger(),
-		0,
+		make([]int, 20),
 	}
 }
 
@@ -118,7 +118,7 @@ func (sim *Simulator) StartSnapshot(serverId string) {
 func (sim *Simulator) NotifySnapshotComplete(serverId string, snapshotId int) {
 	log.Println(serverId)
 	sim.logger.RecordEvent(sim.servers[serverId], EndSnapshot{serverId, snapshotId})
-	sim.serversCompleted++
+	sim.serversCompleted[snapshotId]++
 
 	// TODO: IMPLEMENT ME
 }
@@ -126,21 +126,21 @@ func (sim *Simulator) NotifySnapshotComplete(serverId string, snapshotId int) {
 // Collect and merge snapshot state from all the servers.
 // This function blocks until the snapshot process has completed on all servers.
 func (sim *Simulator) CollectSnapshot(snapshotId int) *SnapshotState {
-	for sim.serversCompleted < len(sim.servers) {
+	for sim.serversCompleted[snapshotId] < len(sim.servers) {
 	}
 
 	// TODO: IMPLEMENT ME
 	snap := SnapshotState{snapshotId, make(map[string]int), make([]*SnapshotMessage, 0)}
 
 	for ID, server := range sim.servers {
-		snap.tokens[ID] = server.snapshot.Tokens
-		for src, messagelist := range server.snapshot.inboundList {
+		snap.tokens[ID] = server.snapshot[snapshotId].Tokens
+		for src, messagelist := range server.snapshot[snapshotId].inboundList {
 			for _, message := range messagelist {
 				snap.messages = append(snap.messages, &SnapshotMessage{src, server.Id, message})
 			}
 		}
 	}
-	sim.serversCompleted = 0
-	println(snap.String())
+	sim.serversCompleted[snapshotId] = 0
+	//println(snap.String())
 	return &snap
 }
