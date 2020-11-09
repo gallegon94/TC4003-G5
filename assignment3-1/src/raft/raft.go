@@ -39,30 +39,42 @@ type ApplyMsg struct {
 	Snapshot    []byte // ignore for lab2; only used in lab3
 }
 
-type RaftState int 
+type Rol int
 
 const (
-	Leader RaftState = iota
+	Leader Rol = iota
 	Follower
 	Candidate
 )
 
+
+const (
+	HBTimeLow  int = 8
+	HBTimeHigh int = 16
+	ElectionTimeoutLow  int = 150
+	ElectionTimeoutHigh int = 300
+)
 //
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
-	mu          sync.Mutex
-	peers       []*labrpc.ClientEnd
-	persister   *Persister
-	me          int // index into peers[]
-	state       raftState
+	mu        sync.Mutex
+	peers     []*labrpc.ClientEnd
+	persister *Persister
+	me        int // index into peers[]
+	// Raft Rol (Leader, Follower, Candidate)
+	rol 	Rol
+	timer 	Time
+	// Persistent state
 	currentTerm int
 	votedFor    int
 	logEntries  map[int]int
-	// Your data here.
-	// Look at the paper's Figure 2 for a description of what
-	// state a Raft server must maintain.
-
+	//Volatile state
+	commitIndex int
+	lastApplied int
+	//Volatile state on leaders
+	nextIndex  []int
+	matchIndex []int
 }
 
 // return currentTerm and whether this server
@@ -72,6 +84,9 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here.
+	term = rf.currentTerm
+	isleader = (rf.rol == Leader)
+
 	return term, isleader
 }
 
@@ -124,16 +139,52 @@ type RequestVoteReply struct {
 	voteGranted bool
 	// Your data here.
 }
+//
+// example RequestEntries RPC arguments structure.
+//
+type RequestEntriesArgs struct {
+	term         int
+	leaderId	 int
+	prevLogIndex int
+	prevLogTerm  int
+	entries      []int
+	leaderCommit int
+	// Your data here.
+}
+
+//
+// example RequestEntries RPC reply structure.
+//
+type RequestEntriesReply struct {
+	term    int
+	success bool
+	// Your data here.
+}
 
 //
 // example RequestVote RPC handler.
 //
-func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {	
-	// Your code here.
-	if (args.term > rf.currentTerm){
-		if (rf.)
+func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
+	// The candidate's term is greater or equal to servers
+	if args.term >= rf.currentTerm &&
+		// The candidate's log is at least up-to-date to receiver
+		args.lastLogIndex >= rf.commitIndex && // Check if it's commitIndex or lastApplied
+		// If it has voted previously for this candidate or hasn't vote yet
+		(rf.votedFor == args.candidateId || rf.votedFor == 0) { // Check this value
+		rf.votedFor = args.candidateId
+		reply.voteGranted = true
+		reply.term = rf.currentTerm
+	} else {
+		reply.term = rf.currentTerm
+		reply.voteGranted = false
 	}
 }
+
+func (rf *Raft) AppendEntries(args RequestEntriesArgs, reply *RequestEntriesReply) {
+
+	rf.timer = Time.NewTimer()
+}
+
 
 //
 // example code to send a RequestVote RPC to a server.
@@ -175,6 +226,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	term := -1
 	isLeader := true
 
+	index = rf.commitIndex + 1
+	term = rf.currentTerm
+	isLeader = (rf.rol == Leader)
+
 	return index, term, isLeader
 }
 
@@ -186,6 +241,18 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	// Your code here, if desired.
+}
+
+func checkLiveness(rf *Raft)
+{
+	while(true){
+		if(Time.Now() - rf.timer ){//Time has happened
+			rf.sendRequestVote(me,{    candidateId    int
+				term        int
+				lastLogIndex    int
+				lastLogTerm    int}, )	
+		}
+	}
 }
 
 //
@@ -206,10 +273,18 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 
-	// Your initialization code here.
+	rf.rol = Follower
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+
+	rf.nextIndex = make([]int, 0)
+	rf.matchIndex = make([]int, 0)
+
+	go checkLiveness(rf)
+	
 	return rf
 }
