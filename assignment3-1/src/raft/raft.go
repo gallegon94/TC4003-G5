@@ -21,7 +21,9 @@ import (
 	"bytes"
 	"encoding/gob"
 	"labrpc"
+	"math/rand"
 	"sync"
+	"time"
 )
 
 // import "bytes"
@@ -47,13 +49,13 @@ const (
 	Candidate
 )
 
-
 const (
-	HBTimeLow  int = 8
-	HBTimeHigh int = 16
+	HBTimeLow           int = 8
+	HBTimeHigh          int = 16
 	ElectionTimeoutLow  int = 150
 	ElectionTimeoutHigh int = 300
 )
+
 //
 // A Go object implementing a single Raft peer.
 //
@@ -63,8 +65,9 @@ type Raft struct {
 	persister *Persister
 	me        int // index into peers[]
 	// Raft Rol (Leader, Follower, Candidate)
-	rol 	Rol
-	timer 	Time
+	rol     Rol
+	timer   *time.Timer
+	channel chan int
 	// Persistent state
 	currentTerm int
 	votedFor    int
@@ -139,12 +142,13 @@ type RequestVoteReply struct {
 	voteGranted bool
 	// Your data here.
 }
+
 //
 // example RequestEntries RPC arguments structure.
 //
 type RequestEntriesArgs struct {
 	term         int
-	leaderId	 int
+	leaderId     int
 	prevLogIndex int
 	prevLogTerm  int
 	entries      []int
@@ -182,9 +186,15 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 
 func (rf *Raft) AppendEntries(args RequestEntriesArgs, reply *RequestEntriesReply) {
 
-	rf.timer = Time.NewTimer()
+	interval := (rand.Intn(ElectionTimeoutHigh-ElectionTimeoutLow) + ElectionTimeoutLow)
+	rf.timer.Reset(time.Duration(interval) * time.Millisecond)
+	//TODO: Check when to downgrade to Follower
 }
 
+func (rf *Raft) sendHeartbeat(server int, args RequestEntriesArgs, reply *RequestEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
+}
 
 //
 // example code to send a RequestVote RPC to a server.
@@ -243,16 +253,71 @@ func (rf *Raft) Kill() {
 	// Your code here, if desired.
 }
 
-func checkLiveness(rf *Raft)
-{
-	while(true){
-		if(Time.Now() - rf.timer ){//Time has happened
-			rf.sendRequestVote(me,{    candidateId    int
-				term        int
-				lastLogIndex    int
-				lastLogTerm    int}, )	
+func (rf *Raft) upgradeToCandidate() {
+
+	var reply RequestVoteReply
+	voteArgs := RequestVoteArgs{rf.me, rf.currentTerm + 1, rf.commitIndex, rf.currentTerm}
+	rf.rol = Candidate
+	rf.currentTerm += 1
+	votes := 1
+	rf.votedFor = rf.me
+
+	// TODO: Check if reply is being correctly populated
+	for index, _ := range rf.peers {
+		if index != rf.me {
+			rf.sendRequestVote(index, voteArgs, &reply)
+
+			if reply.voteGranted {
+				votes += 1
+			}
 		}
+
 	}
+
+	if votes > len(rf.peers)/2 {
+		rf.rol = Leader
+	}
+
+	rf.channel <- 1
+}
+
+func (rf *Raft) heartbeat() {
+	var reply RequestEntriesReply
+	var entries RequestEntriesArgs
+	followers := 0
+	for index, _ := range rf.peers {
+		if index != rf.me {
+			rf.sendHeartbeat(index, entries, &reply)
+
+			if reply.success == true {
+				followers++
+			}
+		}
+
+	}
+
+	//TODO	if()
+
+}
+
+func (rf *Raft) checkLiveness() {
+	interval := (rand.Intn(ElectionTimeoutHigh-ElectionTimeoutLow) + ElectionTimeoutLow)
+	timeout := time.Duration(interval) * time.Millisecond
+	var a int
+
+	for rf.rol != Leader {
+		rf.timer = time.AfterFunc(timeout, func() { rf.upgradeToCandidate() })
+		a = <-rf.channel
+	}
+
+	// Heartbeats
+	for rf.rol == Leader {
+		interval := (rand.Intn(HBTimeHigh-HBTimeLow) + HBTimeLow)
+		timeout := time.Duration(interval) * time.Millisecond
+		rf.timer = time.AfterFunc(timeout, func() { rf.heartbeat() })
+		a = <-rf.channel
+	}
+	a++
 }
 
 //
@@ -284,7 +349,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.nextIndex = make([]int, 0)
 	rf.matchIndex = make([]int, 0)
 
-	go checkLiveness(rf)
-	
+	go rf.checkLiveness()
+
 	return rf
 }
