@@ -45,8 +45,8 @@ type Rol int
 
 const (
 	Leader Rol = iota
-	Follower
 	Candidate
+	Follower
 )
 
 const (
@@ -86,7 +86,6 @@ func (rf *Raft) GetState() (int, bool) {
 
 	var term int
 	var isleader bool
-	// Your code here.
 	term = rf.currentTerm
 	isleader = (rf.rol == Leader)
 
@@ -99,8 +98,6 @@ func (rf *Raft) GetState() (int, bool) {
 // see paper's Figure 2 for a description of what should be persistent.
 //
 func (rf *Raft) persist() {
-	// Your code here.
-	// Example:
 	w := new(bytes.Buffer)
 	e := gob.NewEncoder(w)
 	e.Encode(rf.currentTerm)
@@ -114,8 +111,6 @@ func (rf *Raft) persist() {
 // restore previously persisted state.
 //
 func (rf *Raft) readPersist(data []byte) {
-	// Your code here.
-	// Example:
 	r := bytes.NewBuffer(data)
 	d := gob.NewDecoder(r)
 	d.Decode(&rf.currentTerm)
@@ -127,10 +122,10 @@ func (rf *Raft) readPersist(data []byte) {
 // example RequestVote RPC arguments structure.
 //
 type RequestVoteArgs struct {
-	candidateId  int
-	term         int
-	lastLogIndex int
-	lastLogTerm  int
+	CandidateId  int
+	Term         int
+	LastLogIndex int
+	LastLogTerm  int
 	// Your data here.
 }
 
@@ -138,8 +133,8 @@ type RequestVoteArgs struct {
 // example RequestVote RPC reply structure.
 //
 type RequestVoteReply struct {
-	term        int
-	voteGranted bool
+	Term        int
+	VoteGranted bool
 	// Your data here.
 }
 
@@ -147,12 +142,12 @@ type RequestVoteReply struct {
 // example RequestEntries RPC arguments structure.
 //
 type RequestEntriesArgs struct {
-	term         int
-	leaderId     int
-	prevLogIndex int
-	prevLogTerm  int
-	entries      []int
-	leaderCommit int
+	Term         int
+	LeaderId     int
+	PrevLogIndex int
+	PrevLogTerm  int
+	Entries      []int
+	LeaderCommit int
 	// Your data here.
 }
 
@@ -160,8 +155,8 @@ type RequestEntriesArgs struct {
 // example RequestEntries RPC reply structure.
 //
 type RequestEntriesReply struct {
-	term    int
-	success bool
+	Term    int
+	Success bool
 	// Your data here.
 }
 
@@ -170,28 +165,46 @@ type RequestEntriesReply struct {
 //
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	// The candidate's term is greater or equal to servers
-	if args.term >= rf.currentTerm &&
+	reply.VoteGranted = false
+
+	if args.Term >= rf.currentTerm {
+
+		if args.Term > rf.currentTerm {
+			rf.votedFor = 0
+		}
+
+		rf.currentTerm = args.Term
+		rf.rol = Follower
+
 		// The candidate's log is at least up-to-date to receiver
-		args.lastLogIndex >= rf.commitIndex && // Check if it's commitIndex or lastApplied
+		//if args.LastLogIndex >= rf.commitIndex && // Check if it's commitIndex or lastApplied
 		// If it has voted previously for this candidate or hasn't vote yet
-		(rf.votedFor == args.candidateId || rf.votedFor == 0) { // Check this value
-		rf.votedFor = args.candidateId
-		reply.voteGranted = true
-		reply.term = rf.currentTerm
-	} else {
-		reply.term = rf.currentTerm
-		reply.voteGranted = false
+		if rf.votedFor == args.CandidateId || rf.votedFor == 0 { // Check this value
+			rf.votedFor = args.CandidateId
+			reply.VoteGranted = true
+		}
 	}
+	reply.Term = rf.currentTerm
+	DPrintf("ReqestVote from %v with rol %v to %v reply: %v ", rf.me, rf.rol, args.CandidateId, reply)
+	DPrintf("Exiting with Reply contents %v", reply)
 }
 
 func (rf *Raft) AppendEntries(args RequestEntriesArgs, reply *RequestEntriesReply) {
-
 	interval := (rand.Intn(ElectionTimeoutHigh-ElectionTimeoutLow) + ElectionTimeoutLow)
 	rf.timer.Reset(time.Duration(interval) * time.Millisecond)
-	//TODO: Check when to downgrade to Follower
+	DPrintf("%v got heartbeat cTerm %v Leader %v cTerm %v", rf.me, rf.currentTerm, args.LeaderId, args.Term)
+	if rf.rol == Candidate {
+		rf.rol = Follower
+	}
+	if args.Term > rf.currentTerm {
+		rf.currentTerm = args.Term
+		rf.rol = Follower
+	}
+	DPrintf("Leaving heartbeat with role %v", rf.rol)
+
 }
 
-func (rf *Raft) sendHeartbeat(server int, args RequestEntriesArgs, reply *RequestEntriesReply) bool {
+func (rf *Raft) SendHeartbeat(server int, args RequestEntriesArgs, reply *RequestEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
 }
@@ -258,25 +271,28 @@ func (rf *Raft) upgradeToCandidate() {
 	var reply RequestVoteReply
 	voteArgs := RequestVoteArgs{rf.me, rf.currentTerm + 1, rf.commitIndex, rf.currentTerm}
 	rf.rol = Candidate
-	rf.currentTerm += 1
+	rf.currentTerm++
 	votes := 1
 	rf.votedFor = rf.me
 
+	DPrintf("Starting a new vote from %v", rf.me)
 	// TODO: Check if reply is being correctly populated
-	for index, _ := range rf.peers {
+	for index := range rf.peers {
 		if index != rf.me {
+			// TODO: Check if it's true and if it is, then check the reply.
 			rf.sendRequestVote(index, voteArgs, &reply)
 
-			if reply.voteGranted {
-				votes += 1
+			if reply.VoteGranted {
+				votes++
 			}
 		}
-
 	}
 
 	if votes > len(rf.peers)/2 {
 		rf.rol = Leader
 	}
+
+	DPrintf("%v with rol %v obtained %v votes from a total of %v in term %v", rf.me, rf.rol, votes, len(rf.peers), rf.currentTerm)
 
 	rf.channel <- 1
 }
@@ -284,20 +300,36 @@ func (rf *Raft) upgradeToCandidate() {
 func (rf *Raft) heartbeat() {
 	var reply RequestEntriesReply
 	var entries RequestEntriesArgs
-	followers := 0
-	for index, _ := range rf.peers {
-		if index != rf.me {
-			rf.sendHeartbeat(index, entries, &reply)
+	entries.Term = rf.currentTerm
+	entries.LeaderId = rf.me
 
-			if reply.success == true {
+	followers := 0
+	//	defer func() {rf.channel <- 1}
+
+	if rf.rol != Leader {
+		DPrintf("From heartbeat %v not the leader anymore", rf.me)
+		rf.channel <- 1
+		return
+	}
+
+	for index := range rf.peers {
+		if index != rf.me {
+			rf.SendHeartbeat(index, entries, &reply)
+
+			if reply.Success == true {
 				followers++
+			}
+
+			if reply.Term > rf.currentTerm {
+				DPrintf("Leader %v with term %v got %v term from %v", rf.me, rf.currentTerm, reply.Term, index)
+				rf.rol = Follower
+				rf.channel <- 1
+				return
 			}
 		}
 
 	}
-
-	//TODO	if()
-
+	rf.channel <- 1
 }
 
 func (rf *Raft) checkLiveness() {
@@ -305,17 +337,22 @@ func (rf *Raft) checkLiveness() {
 	timeout := time.Duration(interval) * time.Millisecond
 	var a int
 
-	for rf.rol != Leader {
-		rf.timer = time.AfterFunc(timeout, func() { rf.upgradeToCandidate() })
-		a = <-rf.channel
-	}
+	for {
 
-	// Heartbeats
-	for rf.rol == Leader {
-		interval := (rand.Intn(HBTimeHigh-HBTimeLow) + HBTimeLow)
-		timeout := time.Duration(interval) * time.Millisecond
-		rf.timer = time.AfterFunc(timeout, func() { rf.heartbeat() })
-		a = <-rf.channel
+		for rf.rol != Leader {
+			rf.timer = time.AfterFunc(timeout, func() { rf.upgradeToCandidate() })
+			a = <-rf.channel
+			DPrintf("After waiting for upgrade to Candidate")
+		}
+
+		// Heartbeats
+		for rf.rol == Leader {
+			interval := (rand.Intn(HBTimeHigh-HBTimeLow) + HBTimeLow)
+			timeout := time.Duration(interval) * time.Millisecond
+			rf.timer = time.AfterFunc(timeout, func() { rf.heartbeat() })
+			a = <-rf.channel
+			DPrintf("After Sending heartbeats")
+		}
 	}
 	a++
 }
@@ -348,6 +385,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.nextIndex = make([]int, 0)
 	rf.matchIndex = make([]int, 0)
+	rf.channel = make(chan int, 10)
 
 	go rf.checkLiveness()
 
