@@ -192,7 +192,9 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 func (rf *Raft) AppendEntries(args RequestEntriesArgs, reply *RequestEntriesReply) {
 	interval := (rand.Intn(ElectionTimeoutHigh-ElectionTimeoutLow) + ElectionTimeoutLow)
 	rf.timer.Reset(time.Duration(interval) * time.Millisecond)
+
 	DPrintf("%v got heartbeat cTerm %v Leader %v cTerm %v", rf.me, rf.currentTerm, args.LeaderId, args.Term)
+
 	if rf.rol == Candidate {
 		rf.rol = Follower
 	}
@@ -280,9 +282,7 @@ func (rf *Raft) upgradeToCandidate() {
 	for index := range rf.peers {
 		if index != rf.me {
 			// TODO: Check if it's true and if it is, then check the reply.
-			rf.sendRequestVote(index, voteArgs, &reply)
-
-			if reply.VoteGranted {
+			if rf.sendRequestVote(index, voteArgs, &reply) && reply.VoteGranted {
 				votes++
 			}
 		}
@@ -304,7 +304,6 @@ func (rf *Raft) heartbeat() {
 	entries.LeaderId = rf.me
 
 	followers := 0
-	//	defer func() {rf.channel <- 1}
 
 	if rf.rol != Leader {
 		DPrintf("From heartbeat %v not the leader anymore", rf.me)
@@ -314,7 +313,9 @@ func (rf *Raft) heartbeat() {
 
 	for index := range rf.peers {
 		if index != rf.me {
-			rf.SendHeartbeat(index, entries, &reply)
+			if rf.SendHeartbeat(index, entries, &reply) == false {
+				continue
+			}
 
 			if reply.Success == true {
 				followers++
@@ -323,6 +324,7 @@ func (rf *Raft) heartbeat() {
 			if reply.Term > rf.currentTerm {
 				DPrintf("Leader %v with term %v got %v term from %v", rf.me, rf.currentTerm, reply.Term, index)
 				rf.rol = Follower
+				rf.currentTerm = reply.Term
 				rf.channel <- 1
 				return
 			}
@@ -333,16 +335,16 @@ func (rf *Raft) heartbeat() {
 }
 
 func (rf *Raft) checkLiveness() {
-	interval := (rand.Intn(ElectionTimeoutHigh-ElectionTimeoutLow) + ElectionTimeoutLow)
-	timeout := time.Duration(interval) * time.Millisecond
 	var a int
 
 	for {
 
 		for rf.rol != Leader {
+			interval := (rand.Intn(ElectionTimeoutHigh-ElectionTimeoutLow) + ElectionTimeoutLow)
+			timeout := time.Duration(interval) * time.Millisecond
 			rf.timer = time.AfterFunc(timeout, func() { rf.upgradeToCandidate() })
 			a = <-rf.channel
-			DPrintf("After waiting for upgrade to Candidate")
+			DPrintf("Server %v After waiting for upgrade to Candidate", rf.me)
 		}
 
 		// Heartbeats
@@ -351,7 +353,7 @@ func (rf *Raft) checkLiveness() {
 			timeout := time.Duration(interval) * time.Millisecond
 			rf.timer = time.AfterFunc(timeout, func() { rf.heartbeat() })
 			a = <-rf.channel
-			DPrintf("After Sending heartbeats")
+			DPrintf("Server %v After Sending heartbeats", rf.me)
 		}
 	}
 	a++
