@@ -65,9 +65,8 @@ type Raft struct {
 	persister *Persister
 	me        int // index into peers[]
 	// Raft Rol (Leader, Follower, Candidate)
-	rol     Rol
-	timer   *time.Timer
-	channel chan int
+	rol   Rol
+	timer *time.Timer
 	// Persistent state
 	currentTerm int
 	votedFor    int
@@ -126,6 +125,7 @@ type RequestVoteArgs struct {
 	Term         int
 	LastLogIndex int
 	LastLogTerm  int
+	Ch           chan int
 	// Your data here.
 }
 
@@ -148,6 +148,7 @@ type RequestEntriesArgs struct {
 	PrevLogTerm  int
 	Entries      []int
 	LeaderCommit int
+	Ch           chan int
 	// Your data here.
 }
 
@@ -170,23 +171,23 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term >= rf.currentTerm {
 
 		if args.Term > rf.currentTerm {
-			rf.votedFor = 0
+			rf.votedFor = -1
 		}
 
 		rf.currentTerm = args.Term
 		rf.rol = Follower
+		DPrintf("%v is follower", rf.me)
 
 		// The candidate's log is at least up-to-date to receiver
 		//if args.LastLogIndex >= rf.commitIndex && // Check if it's commitIndex or lastApplied
 		// If it has voted previously for this candidate or hasn't vote yet
-		if rf.votedFor == args.CandidateId || rf.votedFor == 0 { // Check this value
+		if rf.votedFor == args.CandidateId || rf.votedFor == -1 { // Check this value
 			rf.votedFor = args.CandidateId
 			reply.VoteGranted = true
 		}
 	}
 	reply.Term = rf.currentTerm
-	DPrintf("ReqestVote from %v with rol %v to %v reply: %v ", rf.me, rf.rol, args.CandidateId, reply)
-	DPrintf("Exiting with Reply contents %v", reply)
+	DPrintf("ReqestVote: %v -> %v\nCurrent role: %v\nReply: %v ", args.CandidateId, rf.me, rf.rol, reply)
 }
 
 func (rf *Raft) AppendEntries(args RequestEntriesArgs, reply *RequestEntriesReply) {
@@ -197,17 +198,22 @@ func (rf *Raft) AppendEntries(args RequestEntriesArgs, reply *RequestEntriesRepl
 
 	if rf.rol == Candidate {
 		rf.rol = Follower
+		DPrintf("%v is follower", rf.me)
 	}
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
+		DPrintf("%v is follower", rf.me)
 		rf.rol = Follower
 	}
-	DPrintf("Leaving heartbeat with role %v", rf.rol)
+	//DPrintf("Leaving heartbeat with role %v", rf.rol)
 
 }
 
 func (rf *Raft) SendHeartbeat(server int, args RequestEntriesArgs, reply *RequestEntriesReply) bool {
+	DPrintf("Envie HB: %v -> %v", rf.me, server)
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	DPrintf("Recibi respuesta de HB: %v <- %v", rf.me, server)
+	args.Ch <- 1
 	return ok
 }
 
@@ -229,7 +235,10 @@ func (rf *Raft) SendHeartbeat(server int, args RequestEntriesArgs, reply *Reques
 // the struct itself.
 //
 func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *RequestVoteReply) bool {
+	DPrintf("Envie UC: %v -> %v", rf.me, server)
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	DPrintf("Recibi respuesta de UC: %v <- %v", rf.me, server)
+	args.Ch <- server
 	return ok
 }
 
@@ -265,85 +274,100 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // turn off debug output from this instance.
 //
 func (rf *Raft) Kill() {
+	DPrintf("KILL: %v", rf.me)
 	// Your code here, if desired.
 }
 
-func (rf *Raft) upgradeToCandidate() {
-
-	var reply RequestVoteReply
-	voteArgs := RequestVoteArgs{rf.me, rf.currentTerm + 1, rf.commitIndex, rf.currentTerm}
+func (rf *Raft) upgradeToCandidate(ch chan int) {
+	reply := make([]RequestVoteReply, len(rf.peers))
+	voteArgs := RequestVoteArgs{rf.me, rf.currentTerm + 1, rf.commitIndex, rf.currentTerm, make(chan int, len(rf.peers)-1)}
 	rf.rol = Candidate
+	DPrintf("%v is follower", rf.me)
 	rf.currentTerm++
+	//execTerm := rf.currentTerm
 	votes := 1
 	rf.votedFor = rf.me
 
-	DPrintf("Starting a new vote from %v", rf.me)
+	DPrintf("Starting a new vote from %v, cTerm: %v", rf.me, rf.currentTerm)
 	// TODO: Check if reply is being correctly populated
 	for index := range rf.peers {
 		if index != rf.me {
-			// TODO: Check if it's true and if it is, then check the reply.
-			if rf.sendRequestVote(index, voteArgs, &reply) && reply.VoteGranted {
+			go rf.sendRequestVote(index, voteArgs, &reply[index])
+		}
+	}
+
+	for index := range rf.peers {
+		if index != rf.me {
+			server := <-voteArgs.Ch
+			if reply[server].VoteGranted {
 				votes++
+				if votes > len(rf.peers)/2 {
+					rf.rol = Leader
+					DPrintf("%v is leader", rf.me)
+					break
+				}
 			}
 		}
 	}
 
-	if votes > len(rf.peers)/2 {
-		rf.rol = Leader
-	}
+	DPrintf("Out chan check: upgradeToCandidate")
 
 	DPrintf("%v with rol %v obtained %v votes from a total of %v in term %v", rf.me, rf.rol, votes, len(rf.peers), rf.currentTerm)
 
-	rf.channel <- 1
+	ch <- 1
 }
 
-func (rf *Raft) heartbeat() {
-	var reply RequestEntriesReply
+func (rf *Raft) heartbeat(ch chan int) {
+	reply := make([]RequestEntriesReply, len(rf.peers))
 	var entries RequestEntriesArgs
 	entries.Term = rf.currentTerm
 	entries.LeaderId = rf.me
-
-	followers := 0
+	entries.Ch = make(chan int, len(rf.peers)-1)
 
 	if rf.rol != Leader {
 		DPrintf("From heartbeat %v not the leader anymore", rf.me)
-		rf.channel <- 1
+		ch <- 1
 		return
 	}
 
 	for index := range rf.peers {
 		if index != rf.me {
-			if rf.SendHeartbeat(index, entries, &reply) == false {
-				continue
-			}
-
-			if reply.Success == true {
-				followers++
-			}
-
-			if reply.Term > rf.currentTerm {
-				DPrintf("Leader %v with term %v got %v term from %v", rf.me, rf.currentTerm, reply.Term, index)
-				rf.rol = Follower
-				rf.currentTerm = reply.Term
-				rf.channel <- 1
-				return
-			}
+			go rf.SendHeartbeat(index, entries, &reply[index])
 		}
-
 	}
-	rf.channel <- 1
+
+	for index := range rf.peers {
+		if index != rf.me {
+			<-entries.Ch
+			DPrintf("Termino RPC: %v <- %v", rf.me, index)
+		}
+	}
+	DPrintf("Out chan check: heartbeat")
+
+	for index := range rf.peers {
+		//check if still leader
+		if reply[index].Term > rf.currentTerm {
+			DPrintf("Leader %v with term %v got %v term from %v", rf.me, rf.currentTerm, reply[index].Term, index)
+			rf.rol = Follower
+			DPrintf("%v is follower", rf.me)
+			rf.currentTerm = reply[index].Term
+			ch <- 1
+			return
+		}
+	}
+	ch <- 1
 }
 
 func (rf *Raft) checkLiveness() {
-	var a int
+	ch := make(chan int, 0)
 
 	for {
-
+		DPrintf("CL")
 		for rf.rol != Leader {
 			interval := (rand.Intn(ElectionTimeoutHigh-ElectionTimeoutLow) + ElectionTimeoutLow)
 			timeout := time.Duration(interval) * time.Millisecond
-			rf.timer = time.AfterFunc(timeout, func() { rf.upgradeToCandidate() })
-			a = <-rf.channel
+			rf.timer = time.AfterFunc(timeout, func() { rf.upgradeToCandidate(ch) })
+			<-ch
 			DPrintf("Server %v After waiting for upgrade to Candidate", rf.me)
 		}
 
@@ -351,12 +375,12 @@ func (rf *Raft) checkLiveness() {
 		for rf.rol == Leader {
 			interval := (rand.Intn(HBTimeHigh-HBTimeLow) + HBTimeLow)
 			timeout := time.Duration(interval) * time.Millisecond
-			rf.timer = time.AfterFunc(timeout, func() { rf.heartbeat() })
-			a = <-rf.channel
+			DPrintf("HB")
+			rf.timer = time.AfterFunc(timeout, func() { rf.heartbeat(ch) })
+			<-ch
 			DPrintf("Server %v After Sending heartbeats", rf.me)
 		}
 	}
-	a++
 }
 
 //
@@ -376,18 +400,20 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+	rf.currentTerm = 0
 
 	rf.rol = Follower
+	DPrintf("%v is follower", rf.me)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	rf.commitIndex = 0
 	rf.lastApplied = 0
+	rf.votedFor = -1
 
 	rf.nextIndex = make([]int, 0)
 	rf.matchIndex = make([]int, 0)
-	rf.channel = make(chan int, 10)
 
 	go rf.checkLiveness()
 
